@@ -14,7 +14,41 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Extract ZIP
-        run: unzip -o *.zip
+        run: |
+          unzip -o Jarvis.zip
+          ls -la
+
+      - name: Fix SecurePrefs and Dependency
+        working-directory: ./Jarvis
+        run: |
+          grep -q "androidx.security:security-crypto" app/build.gradle.kts || \
+          printf '\ndependencies {\n    implementation("androidx.security:security-crypto:1.1.0-alpha06")\n}\n' >> app/build.gradle.kts
+
+          mkdir -p app/src/main/java/com/jarvis/app
+          cat > app/src/main/java/com/jarvis/app/SecurePrefs.kt <<'EOF'
+          package com.jarvis.app
+
+          import android.content.Context
+          import android.content.SharedPreferences
+          import androidx.security.crypto.EncryptedSharedPreferences
+          import androidx.security.crypto.MasterKey
+
+          object SecurePrefs {
+              fun getPrefs(context: Context, name: String = "jarvis_secure_prefs"): SharedPreferences {
+                  val masterKey = MasterKey.Builder(context)
+                      .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                      .build()
+
+                  return EncryptedSharedPreferences.create(
+                      context,
+                      name,
+                      masterKey,
+                      EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                      EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                  )
+              }
+          }
+          EOF
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -22,14 +56,18 @@ jobs:
           java-version: "17"
           distribution: "temurin"
 
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Build Debug APK
         working-directory: ./Jarvis
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Jarvis-APK
           path: Jarvis/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
