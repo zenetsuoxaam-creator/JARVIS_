@@ -16,30 +16,42 @@ jobs:
       - name: Extract ZIP
         run: unzip -o *.zip
 
-      - name: Inject Missing Definitions
+      - name: Fix Imports and Dependencies
         working-directory: ./Jarvis
         run: |
-          # JarvisInCallService ke liye import
-          sed -i '1s/^/import android.telecom.CallAudioState\n/' app/src/main/java/com/jarvis/app/JarvisInCallService.kt
+          python3 - << 'PYEOF'
+          from pathlib import Path
 
-          # Missing keys aur variables ke liye ek config file banana
-          mkdir -p app/src/main/java/com/jarvis/app/config
-          cat << 'EOF' > app/src/main/java/com/jarvis/app/config/MissingConfig.kt
-          package com.jarvis.app.config
+          # 1. JarvisInCallService.kt mein CallAudioState import ensure karna
+          incall = Path("app/src/main/java/com/jarvis/app/JarvisInCallService.kt")
+          if incall.exists():
+              text = incall.read_text(encoding="utf-8")
+              if "import android.telecom.CallAudioState" not in text:
+                  if "package " in text:
+                      lines = text.splitlines()
+                      out = []
+                      added = False
+                      for line in lines:
+                          out.append(line)
+                          if not added and line.startswith("package "):
+                              out.append("import android.telecom.CallAudioState")
+                              added = True
+                      incall.write_text("\n".join(out) + "\n", encoding="utf-8")
+                  else:
+                      incall.write_text("import android.telecom.CallAudioState\n" + text, encoding="utf-8")
 
-          object MissingConfig {
-              const val geminiKey = "missing_key_placeholder"
-              const val geminiKeys = "missing_keys_placeholder"
-              const val isQuotaLimited = false
-              const val isValid = true
-          }
-          EOF
-
-          # Baaki files mein missing references ko is config se link karna
-          find app/src/main/java -type f -name "*.kt" -exec sed -i 's/geminiKey/com.jarvis.app.config.MissingConfig.geminiKey/g' {} +
-          find app/src/main/java -type f -name "*.kt" -exec sed -i 's/geminiKeys/com.jarvis.app.config.MissingConfig.geminiKeys/g' {} +
-          find app/src/main/java -type f -name "*.kt" -exec sed -i 's/isQuotaLimited/com.jarvis.app.config.MissingConfig.isQuotaLimited/g' {} +
-          find app/src/main/java -type f -name "*.kt" -exec sed -i 's/isValid/com.jarvis.app.config.MissingConfig.isValid/g' {} +
+          # 2. app/build.gradle.kts mein security-crypto dependency ensure karna
+          gradle_file = Path("app/build.gradle.kts")
+          if gradle_file.exists():
+              g_text = gradle_file.read_text(encoding="utf-8")
+              if "androidx.security:security-crypto" not in g_text:
+                  dep_line = '    implementation("androidx.security:security-crypto:1.1.0-alpha06")'
+                  if "dependencies {" in g_text:
+                      g_text = g_text.replace("dependencies {", f"dependencies {{\n{dep_line}", 1)
+                  else:
+                      g_text += f"\n\ndependencies {{\n{dep_line}\n}}\n"
+                  gradle_file.write_text(g_text, encoding="utf-8")
+          PYEOF
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -57,4 +69,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Jarvis-Debug-APK
-          path: app/build/outputs/apk/debug/*.apk
+          path: Jarvis/app/build/outputs/apk/debug/*.apk
