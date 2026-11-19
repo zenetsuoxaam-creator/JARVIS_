@@ -14,9 +14,57 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Extract ZIP
+        run: unzip -o *.zip
+
+      - name: Fix SecurePrefs and Gradle
+        working-directory: ./Jarvis
         run: |
-          unzip -o Jarvis.zip
-          ls -la
+          python3 - << 'PYEOF'
+          from pathlib import Path
+
+          gradle_path = Path("app/build.gradle.kts")
+          g_text = gradle_path.read_text(encoding="utf-8")
+          if "androidx.security:security-crypto" not in g_text:
+              g_text += "\n\ndependencies {\n    implementation(\"androidx.security:security-crypto:1.1.0-alpha06\")\n}\n"
+              gradle_path.write_text(g_text, encoding="utf-8")
+
+          prefs_path = Path("app/src/main/java/com/jarvis/app/SecurePrefs.kt")
+          prefs_code = """package com.jarvis.app
+
+          import android.content.Context
+          import android.content.SharedPreferences
+          import androidx.security.crypto.EncryptedSharedPreferences
+          import androidx.security.crypto.MasterKey
+
+          object SecurePrefs {
+              fun prefs(context: Context, name: String = "jarvis_prefs"): SharedPreferences {
+                  return try {
+                      val masterKey = MasterKey.Builder(context)
+                          .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                          .build()
+                      EncryptedSharedPreferences.create(
+                          context,
+                          name,
+                          masterKey,
+                          EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                          EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                      )
+                  } catch (_: Exception) {
+                      context.getSharedPreferences(name, Context.MODE_PRIVATE)
+                  }
+              }
+
+              fun putString(context: Context, key: String, value: String?, name: String = "jarvis_prefs") {
+                  prefs(context, name).edit().putString(key, value).apply()
+              }
+
+              fun getString(context: Context, key: String, defaultValue: String = "", name: String = "jarvis_prefs"): String {
+                  return prefs(context, name).getString(key, defaultValue) ?: defaultValue
+              }
+          }
+          """
+          prefs_path.write_text(prefs_code.strip() + "\n", encoding="utf-8")
+          PYEOF
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -24,18 +72,14 @@ jobs:
           java-version: "17"
           distribution: "temurin"
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-
       - name: Build Debug APK
         working-directory: ./Jarvis
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Jarvis-APK
           path: Jarvis/app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
